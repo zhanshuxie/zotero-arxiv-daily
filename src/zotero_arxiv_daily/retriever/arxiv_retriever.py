@@ -352,11 +352,12 @@ class ArxivRetriever(BaseRetriever):
         if full_text is None:
             full_text = extract_text_from_pdf(raw_paper)
         code_url = None
-        if self.retriever_config.get("require_open_source_code", False):
+        require_open_source_code = self.retriever_config.get("require_open_source_code", False)
+        if require_open_source_code or self.retriever_config.get("show_open_source_code", False):
             code_url = find_open_source_code(raw_paper, full_text)
-            if not code_url:
-                logger.info(f"Skipping {title}: no verified open-source code repository")
-                return None
+        if require_open_source_code and not code_url:
+            logger.info(f"Skipping {title}: no verified open-source code repository")
+            return None
         return Paper(
             source=self.name,
             title=title,
