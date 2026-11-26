@@ -32,6 +32,70 @@ ARXIV_HEADER_PATTERN = re.compile(
     r"^(?:arxiv:\s*\S+(?:\s+\[[^\]]*\])?)?\s*(?:announce\s+type:\s*[\w-]+)?\s*(?:abstract:\s*)?",
     flags=re.IGNORECASE,
 )
+GITHUB_REPOSITORY = re.compile(
+    r"https?://(?:www\.)?github\.com/([a-z\d][a-z\d-]*)/([a-z\d_.-]+)",
+    flags=re.IGNORECASE,
+)
+CODE_RELEASE = re.compile(
+    r"\b(?:our\s+(?:source\s+)?code|(?:source\s+)?code\s+"
+    r"(?:is\s+)?(?:publicly\s+)?(?:available|released)|"
+    r"(?:code|implementation|repository)\s*:)[^.!?\n]{0,120}$",
+    flags=re.IGNORECASE,
+)
+OPEN_SOURCE_LICENSES = {
+    "0BSD", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "BSL-1.0",
+    "GPL-2.0", "GPL-3.0", "AGPL-3.0", "LGPL-2.1", "LGPL-3.0",
+    "GPL-2.0-only", "GPL-2.0-or-later", "GPL-3.0-only", "GPL-3.0-or-later",
+    "AGPL-3.0-only", "AGPL-3.0-or-later", "LGPL-2.1-only", "LGPL-2.1-or-later",
+    "LGPL-3.0-only", "LGPL-3.0-or-later", "MIT", "MPL-2.0", "ISC", "Unlicense",
+}
+
+
+def find_open_source_code(
+    paper: ArxivResult,
+    full_text: str | None,
+) -> str | None:
+    candidates = set()
+    sources = [(paper.comment or "", False), (paper.summary, False)]
+    if full_text:
+        sources.append((full_text[:12000], True))
+    token = os.environ.get("GH_TOKEN")
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    for text, require_release_statement in sources:
+        for match in GITHUB_REPOSITORY.finditer(text):
+            if require_release_statement and not CODE_RELEASE.search(
+                text[max(0, match.start() - 150):match.start()]
+            ):
+                continue
+            owner, name = match.groups()
+            name = name.rstrip(".").removesuffix(".git")
+            candidate = f"{owner}/{name}"
+            if not name or candidate.lower() in candidates:
+                continue
+            candidates.add(candidate.lower())
+            try:
+                response = requests.get(
+                    f"https://api.github.com/repos/{candidate}",
+                    headers=headers,
+                    allow_redirects=False,
+                    timeout=(5, 10),
+                )
+                if response.status_code == 404:
+                    continue
+                response.raise_for_status()
+                repository = response.json()
+            except (requests.RequestException, ValueError) as error:
+                logger.warning(f"Unable to verify repository {candidate}: {error}")
+                continue
+            license_id = (repository.get("license") or {}).get("spdx_id")
+            if (
+                license_id in OPEN_SOURCE_LICENSES
+                and repository.get("private") is False
+                and repository.get("size", 0) > 0
+                and repository.get("language")
+            ):
+                return f"https://github.com/{candidate}"
+    return None
 
 
 def _download_file(url: str, path: str) -> None:
@@ -277,7 +341,7 @@ class ArxivRetriever(BaseRetriever):
 
         return raw_papers
 
-    def convert_to_paper(self, raw_paper: ArxivResult) -> Paper:
+    def convert_to_paper(self, raw_paper: ArxivResult) -> Paper | None:
         title = raw_paper.title
         authors = [a.name for a in raw_paper.authors]
         abstract = raw_paper.summary
@@ -287,6 +351,12 @@ class ArxivRetriever(BaseRetriever):
             full_text = extract_text_from_html(raw_paper)
         if full_text is None:
             full_text = extract_text_from_pdf(raw_paper)
+        code_url = None
+        if self.retriever_config.get("require_open_source_code", False):
+            code_url = find_open_source_code(raw_paper, full_text)
+            if not code_url:
+                logger.info(f"Skipping {title}: no verified open-source code repository")
+                return None
         return Paper(
             source=self.name,
             title=title,
@@ -295,6 +365,7 @@ class ArxivRetriever(BaseRetriever):
             url=raw_paper.entry_id,
             pdf_url=pdf_url,
             full_text=full_text,
+            code_url=code_url,
         )
 
 
