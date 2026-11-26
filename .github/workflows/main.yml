@@ -4,6 +4,9 @@ on:
   schedule:
     - cron: '0 22 * * *'
 
+permissions:
+  contents: read
+
 jobs:
   calculate-and-send:
     runs-on: ubuntu-latest
@@ -26,6 +29,7 @@ jobs:
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
+          GH_TOKEN: ${{ github.token }}
           CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
         run: |
           printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
