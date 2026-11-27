@@ -52,6 +52,18 @@ class Paper:
 
     def _generate_tldr_with_llm(self, openai_client:OpenAI,llm_params:dict) -> str:
         lang = llm_params.get('language', 'English')
+        if llm_params.get('translate_abstract', False) and self.abstract:
+            return _request_llm(
+                openai_client,
+                llm_params,
+                [
+                    {
+                        "role": "system",
+                        "content": f"Translate the complete scientific abstract into {lang}. Preserve technical details and terminology. Return only the translation.",
+                    },
+                    {"role": "user", "content": self.abstract},
+                ],
+            )
         prompt = f"Given the following information of a paper, generate a one-sentence TLDR summary in {lang}:\n\n"
         if self.title:
             prompt += f"Title:\n {self.title}\n\n"
